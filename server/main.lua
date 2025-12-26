@@ -17,48 +17,7 @@ local CurrentWeatherState = {
     lastUpdate = os.time()
 }
 
--- Initialize global weather state
-CreateThread(function()
-    Wait(1000)
-    GlobalState.airlineWeather = CurrentWeatherState
-    GlobalState.atcStatus = 'operational' -- operational, busy, closed
-    print('^2[dps-airlines]^7 GlobalState weather/ATC initialized')
-end)
-
--- Periodic weather check and state bag update (server-side only)
-CreateThread(function()
-    while true do
-        Wait(Config.Weather.checkInterval or 60000)
-
-        if Config.Weather.enabled then
-            local weather = GetCurrentServerWeather()
-            local conditions = EvaluateWeatherConditions(weather)
-
-            CurrentWeatherState = {
-                weather = weather,
-                canFly = conditions.canFly,
-                delayMinutes = conditions.delay,
-                payBonus = conditions.bonus,
-                reason = conditions.reason,
-                lastUpdate = os.time()
-            }
-
-            -- Update GlobalState - clients auto-sync
-            GlobalState.airlineWeather = CurrentWeatherState
-
-            -- Notify pilots of weather changes
-            if not conditions.canFly then
-                local players = QBCore.Functions.GetQBPlayers()
-                for _, player in pairs(players) do
-                    if player.PlayerData.job.name == Config.Job and player.PlayerData.job.onduty then
-                        Notify(player.PlayerData.source, 'Weather Alert: ' .. conditions.reason, 'error')
-                    end
-                end
-            end
-        end
-    end
-end)
-
+-- Weather helper functions (defined before use)
 local function GetCurrentServerWeather()
     -- Try to get from qb-weathersync
     local success, weather = pcall(function()
@@ -101,6 +60,48 @@ local function EvaluateWeatherConditions(weather)
 
     return { canFly = true, delay = 0, bonus = 1.0 }
 end
+
+-- Initialize global weather state
+CreateThread(function()
+    Wait(1000)
+    GlobalState.airlineWeather = CurrentWeatherState
+    GlobalState.atcStatus = 'operational' -- operational, busy, closed
+    print('^2[dps-airlines]^7 GlobalState weather/ATC initialized')
+end)
+
+-- Periodic weather check and state bag update (server-side only)
+CreateThread(function()
+    while true do
+        Wait(Config.Weather.checkInterval or 60000)
+
+        if Config.Weather.enabled then
+            local weather = GetCurrentServerWeather()
+            local conditions = EvaluateWeatherConditions(weather)
+
+            CurrentWeatherState = {
+                weather = weather,
+                canFly = conditions.canFly,
+                delayMinutes = conditions.delay,
+                payBonus = conditions.bonus,
+                reason = conditions.reason,
+                lastUpdate = os.time()
+            }
+
+            -- Update GlobalState - clients auto-sync
+            GlobalState.airlineWeather = CurrentWeatherState
+
+            -- Notify pilots of weather changes
+            if not conditions.canFly then
+                local players = QBCore.Functions.GetQBPlayers()
+                for _, player in pairs(players) do
+                    if player.PlayerData.job.name == Config.Job and player.PlayerData.job.onduty then
+                        Notify(player.PlayerData.source, 'Weather Alert: ' .. conditions.reason, 'error')
+                    end
+                end
+            end
+        end
+    end
+end)
 
 -- Export for other resources
 exports('GetWeatherState', function()
