@@ -198,18 +198,33 @@ end
 
 -- =====================================
 -- FERRY JOB COMPLETION MONITOR
+-- Altitude-aware throttling for performance
 -- =====================================
 
 CreateThread(function()
     while true do
-        Wait(3000)
+        local throttleRate = 5000 -- Default when idle
 
         if ActiveFerryJob and CurrentPlane and DoesEntityExist(CurrentPlane) then
+            local planeCoords = GetEntityCoords(CurrentPlane)
+            local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
+
+            -- Throttle based on altitude (cruising = less frequent checks)
+            if heightAboveGround > 500 then
+                throttleRate = 10000 -- Cruising: every 10 seconds
+            elseif heightAboveGround > 200 then
+                throttleRate = 5000  -- Mid-altitude: every 5 seconds
+            elseif heightAboveGround > 50 then
+                throttleRate = 3000  -- Low altitude: every 3 seconds
+            else
+                throttleRate = 1000  -- Ground/approach: every 1 second
+            end
+
             local toAirport = Locations.Airports[ActiveFerryJob.to_airport]
             if toAirport then
-                local coords = GetEntityCoords(CurrentPlane)
-                local dist = #(coords - vector3(toAirport.coords.x, toAirport.coords.y, toAirport.coords.z))
-                local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
+                -- Use vector math (faster than GetDistanceBetweenCoords native)
+                local destCoords = vector3(toAirport.coords.x, toAirport.coords.y, toAirport.coords.z)
+                local dist = #(planeCoords - destCoords)
                 local speed = GetEntitySpeed(CurrentPlane)
 
                 -- Check if landed at destination
@@ -218,6 +233,8 @@ CreateThread(function()
                 end
             end
         end
+
+        Wait(throttleRate)
     end
 end)
 

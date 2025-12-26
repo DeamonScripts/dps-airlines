@@ -5,6 +5,34 @@ local ActiveDispatch = nil
 local DispatchBlip = nil
 
 -- =====================================
+-- STATE BAG DISPATCH CACHE
+-- Listens to GlobalState instead of polling database
+-- =====================================
+
+local CachedDispatchFlights = {}
+
+-- Listen for dispatch state changes from server
+AddStateBagChangeHandler('airlineDispatch', 'global', function(bagName, key, value)
+    if not value then return end
+
+    CachedDispatchFlights = value.flights or {}
+
+    if Config.Debug then
+        print('[dps-airlines] Dispatch State Bag updated: ' .. #CachedDispatchFlights .. ' flights available')
+    end
+end)
+
+-- Get cached flights (no network call)
+local function GetCachedFlights()
+    -- Try GlobalState first
+    local state = GlobalState.airlineDispatch
+    if state and state.flights then
+        return state.flights
+    end
+    return CachedDispatchFlights
+end
+
+-- =====================================
 -- DISPATCH TABLET UI
 -- Enhanced flight board with detailed information
 -- =====================================
@@ -15,8 +43,8 @@ function OpenDispatchTablet()
         return
     end
 
-    -- Fetch all available flights
-    local flights = lib.callback.await('dps-airlines:server:getAvailableFlights', false)
+    -- Use cached flights from State Bag (no database poll!)
+    local flights = GetCachedFlights()
     local stats = lib.callback.await('dps-airlines:server:getPilotStats', false)
     local weather = GetCachedWeather and GetCachedWeather() or { weather = 'CLEAR', canFly = true }
 
@@ -129,6 +157,9 @@ function OpenDispatchTablet()
         description = 'Update flight listings',
         icon = 'fas fa-sync-alt',
         onSelect = function()
+            -- Trigger server to refresh State Bag, then reopen
+            TriggerServerEvent('dps-airlines:server:refreshDispatch')
+            Wait(500) -- Allow state bag to sync
             OpenDispatchTablet()
         end
     })
@@ -329,18 +360,34 @@ end
 
 -- =====================================
 -- DISPATCH COMPLETION CHECK
+-- Altitude-aware throttling for performance
 -- =====================================
 
 CreateThread(function()
     while true do
-        Wait(2000)
+        -- Use dynamic throttle rate based on flight altitude
+        local throttleRate = 2000 -- Default
 
         if ActiveDispatch and CurrentPlane and DoesEntityExist(CurrentPlane) then
+            local planeCoords = GetEntityCoords(CurrentPlane)
+            local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
+
+            -- Throttle check frequency based on altitude
+            if heightAboveGround > 500 then
+                throttleRate = 10000 -- Cruising: check every 10 seconds
+            elseif heightAboveGround > 200 then
+                throttleRate = 5000  -- Mid-altitude: every 5 seconds
+            elseif heightAboveGround > 50 then
+                throttleRate = 3000  -- Low altitude: every 3 seconds
+            else
+                throttleRate = 1000  -- Ground/approach: every 1 second
+            end
+
             local toAirport = Locations.Airports[ActiveDispatch.to_airport]
             if toAirport then
-                local playerPos = GetEntityCoords(PlayerPedId())
-                local dist = #(playerPos - vector3(toAirport.coords.x, toAirport.coords.y, toAirport.coords.z))
-                local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
+                -- Use vector math (faster than GetDistanceBetweenCoords native)
+                local destCoords = vector3(toAirport.coords.x, toAirport.coords.y, toAirport.coords.z)
+                local dist = #(planeCoords - destCoords)
                 local speed = GetEntitySpeed(CurrentPlane)
 
                 -- Check if landed at destination
@@ -348,7 +395,11 @@ CreateThread(function()
                     CompleteDispatch()
                 end
             end
+        else
+            throttleRate = 5000 -- No active flight, slow check
         end
+
+        Wait(throttleRate)
     end
 end)
 

@@ -2,7 +2,85 @@
 local QBCore = exports['qb-core']:GetCoreObject()
 
 -- =====================================
--- DISPATCH CALLBACKS
+-- STATE BAG DISPATCH SYSTEM
+-- Syncs available flights via GlobalState (no polling)
+-- =====================================
+
+local CachedDispatchList = {}
+
+-- Update GlobalState with available flights
+local function UpdateDispatchStateBag()
+    local dispatches = MySQL.query.await([[
+        SELECT * FROM airline_dispatch
+        WHERE status = 'available'
+        AND (expires_at IS NULL OR expires_at > NOW())
+        ORDER BY
+            CASE priority
+                WHEN 'urgent' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'normal' THEN 3
+                ELSE 4
+            END,
+            created_at ASC
+        LIMIT 20
+    ]])
+
+    -- Add labels
+    for _, dispatch in ipairs(dispatches or {}) do
+        local fromAirport = Locations.Airports[dispatch.from_airport]
+        local toAirport = Locations.Airports[dispatch.to_airport]
+        dispatch.from_label = fromAirport and fromAirport.label or dispatch.from_airport
+        dispatch.to_label = toAirport and toAirport.label or dispatch.to_airport
+    end
+
+    CachedDispatchList = dispatches or {}
+
+    -- Update GlobalState - clients auto-sync
+    GlobalState.airlineDispatch = {
+        flights = CachedDispatchList,
+        lastUpdate = os.time()
+    }
+end
+
+-- Initialize dispatch state bag
+CreateThread(function()
+    Wait(2000)
+    UpdateDispatchStateBag()
+    print('^2[dps-airlines]^7 Dispatch State Bag initialized')
+end)
+
+-- Refresh dispatch state bag periodically (every 30 seconds)
+CreateThread(function()
+    while true do
+        Wait(30000)
+        UpdateDispatchStateBag()
+    end
+end)
+
+-- Force refresh when a dispatch is created/completed/cancelled
+local function RefreshDispatch()
+    UpdateDispatchStateBag()
+end
+
+exports('RefreshDispatch', RefreshDispatch)
+
+-- Client can request a refresh (rate limited)
+local lastRefreshRequest = {}
+RegisterNetEvent('dps-airlines:server:refreshDispatch', function()
+    local source = source
+    local now = os.time()
+
+    -- Rate limit: once per 5 seconds per player
+    if lastRefreshRequest[source] and now - lastRefreshRequest[source] < 5 then
+        return
+    end
+    lastRefreshRequest[source] = now
+
+    RefreshDispatch()
+end)
+
+-- =====================================
+-- DISPATCH CALLBACKS (fallback for direct queries)
 -- =====================================
 
 lib.callback.register('dps-airlines:server:getDispatchQueue', function(source)
@@ -104,6 +182,9 @@ RegisterNetEvent('dps-airlines:server:createDispatch', function(data)
         description = 'Flight dispatch created',
         type = 'success'
     })
+
+    -- Refresh State Bag so all clients get the update instantly
+    RefreshDispatch()
 
     -- Notify all on-duty pilots
     local players = QBCore.Functions.GetQBPlayers()
