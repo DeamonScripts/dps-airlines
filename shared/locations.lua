@@ -188,6 +188,15 @@ Locations.NPCs = {
         scenario = 'WORLD_HUMAN_BUM_STANDING',
         interaction = 'cargo',
     },
+    {
+        id = 'charter_desk',
+        label = 'Charter Services',
+        coords = vector4(-1034.89, -2732.98, 20.17, 240.0), -- At terminal
+        model = 's_f_m_shop_high',
+        scenario = 'WORLD_HUMAN_STAND_IMPATIENT',
+        interaction = 'charter', -- Public charter requests
+        public = true, -- Any player can interact
+    },
 }
 
 -- Blip Configuration

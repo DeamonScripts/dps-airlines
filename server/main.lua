@@ -367,7 +367,7 @@ RegisterNetEvent('dps-airlines:server:startFlight', function(data)
     Notify(source, string.format('Flight %s departed to %s', flightNumber, Locations.Airports[data.to].label), 'success')
 end)
 
-RegisterNetEvent('dps-airlines:server:completeFlight', function()
+RegisterNetEvent('dps-airlines:server:completeFlight', function(landingData)
     local source = source
     local Player = GetPlayer(source)
     if not Player then return end
@@ -391,10 +391,25 @@ RegisterNetEvent('dps-airlines:server:completeFlight', function()
     local totalPay = math.floor(basePay + passengerPay + cargoPay + distanceBonus)
 
     -- Apply weather bonus if applicable
-    -- (Weather bonus applied client-side and passed through)
+    local weatherState = GlobalState.airlineWeather
+    if weatherState and weatherState.payBonus > 1.0 then
+        totalPay = math.floor(totalPay * weatherState.payBonus)
+    end
 
     -- Calculate flight time
-    local flightTime = (os.time() - flight.startTime) / 3600 -- Convert to hours
+    local arrivalTime = os.time()
+    local flightTimeSeconds = arrivalTime - flight.startTime
+    local flightTimeHours = flightTimeSeconds / 3600
+
+    -- Determine landing quality from client data
+    local landingQuality = 'normal'
+    if landingData and landingData.landingSpeed then
+        if landingData.landingSpeed < 5 then
+            landingQuality = 'smooth'
+        elseif landingData.landingSpeed > 15 then
+            landingQuality = 'hard'
+        end
+    end
 
     -- Update database
     MySQL.update.await([[
@@ -405,15 +420,29 @@ RegisterNetEvent('dps-airlines:server:completeFlight', function()
         WHERE id = ?
     ]], { totalPay, flight.id })
 
-    -- Update pilot stats
-    UpdatePilotStats(citizenid, {
-        flights = 1,
+    -- Create detailed logbook entry
+    local logbookData = {
+        flightId = flight.id,
+        flightNumber = flight.flightNumber,
+        from = flight.from,
+        to = flight.to,
+        aircraft = flight.plane,
+        flightType = flight.flightType,
         passengers = flight.passengers,
         cargo = flight.cargo,
-        earnings = totalPay,
-        hours = flightTime,
-        rep = Config.RepGainPerFlight
-    })
+        departureTime = flight.startTime,
+        arrivalTime = arrivalTime,
+        payment = totalPay,
+        landingQuality = landingQuality,
+        landings = 1,
+        weather = weatherState and weatherState.weather or 'CLEAR',
+        status = 'completed'
+    }
+
+    -- Use the logbook system to track detailed stats
+    pcall(function()
+        exports['dps-airlines']:CreateLogbookEntry(citizenid, logbookData)
+    end)
 
     -- Pay the player
     if Config.UseSocietyFunds then
@@ -435,7 +464,9 @@ RegisterNetEvent('dps-airlines:server:completeFlight', function()
         flightNumber = flight.flightNumber,
         payment = totalPay,
         passengers = flight.passengers,
-        cargo = flight.cargo
+        cargo = flight.cargo,
+        flightTime = flightTimeHours,
+        landingQuality = landingQuality
     })
 
     Notify(source, string.format('Flight completed! Earned $%d', totalPay), 'success')

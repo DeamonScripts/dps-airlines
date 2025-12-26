@@ -200,6 +200,20 @@ function SetupTargets()
         })
     end
 
+    -- Charter Desk NPC (Public - any player can use)
+    if SpawnedNPCs['charter_desk'] then
+        exports.ox_target:addLocalEntity(SpawnedNPCs['charter_desk'], {
+            {
+                name = 'airlines_charter_request',
+                icon = 'fas fa-plane',
+                label = 'Request Private Charter',
+                onSelect = function()
+                    ViewMyCharterStatus()
+                end
+            }
+        })
+    end
+
     -- Plane spawn zone
     exports.ox_target:addBoxZone({
         coords = Locations.Hub.planeSpawns[1],
@@ -278,11 +292,20 @@ function OpenMainMenu()
     -- View flights (on duty only)
     if OnDuty then
         table.insert(options, {
-            title = 'Available Flights',
+            title = 'Flight Dispatch',
             description = 'View and accept flight assignments',
             icon = 'fas fa-clipboard-list',
             onSelect = function()
-                OpenFlightsMenu()
+                OpenDispatchTablet()
+            end
+        })
+
+        table.insert(options, {
+            title = 'Ferry Flights',
+            description = 'Aircraft repositioning jobs',
+            icon = 'fas fa-truck-plane',
+            onSelect = function()
+                OpenFerryJobsMenu()
             end
         })
 
@@ -407,38 +430,107 @@ function OpenFlightsMenu()
 end
 
 function OpenStatsMenu()
-    local stats = lib.callback.await('dps-airlines:server:getPilotStats', false)
+    local stats = lib.callback.await('dps-airlines:server:getPilotDetailedStats', false)
+
+    if not stats then
+        lib.notify({ title = 'Error', description = 'Could not load stats', type = 'error' })
+        return
+    end
 
     local options = {
+        -- Career Overview
         {
-            title = 'Total Flights',
-            description = tostring(stats.total_flights),
-            icon = 'fas fa-plane'
+            title = 'Career Overview',
+            description = string.format('License: %s | Rep: %d',
+                (stats.license_type or 'student'):upper(),
+                stats.reputation or 0
+            ),
+            icon = 'fas fa-id-card',
+            disabled = true
         },
-        {
-            title = 'Passengers Transported',
-            description = tostring(stats.total_passengers),
-            icon = 'fas fa-users'
-        },
-        {
-            title = 'Cargo Delivered',
-            description = string.format('%d kg', stats.total_cargo),
-            icon = 'fas fa-boxes'
-        },
-        {
-            title = 'Total Earnings',
-            description = string.format('$%d', stats.total_earnings),
-            icon = 'fas fa-dollar-sign'
-        },
+        -- Flight Hours
         {
             title = 'Flight Hours',
-            description = string.format('%.1f hours', stats.flight_hours),
-            icon = 'fas fa-clock'
+            icon = 'fas fa-clock',
+            disabled = true,
+            metadata = {
+                { label = 'Total', value = string.format('%.1f hrs', stats.total_hours or 0) },
+                { label = 'PIC', value = string.format('%.1f hrs', stats.pic_hours or 0) },
+                { label = 'Night', value = string.format('%.1f hrs', stats.night_hours or 0) },
+                { label = 'IFR', value = string.format('%.1f hrs', stats.ifr_hours or 0) }
+            }
         },
+        -- By Job Type
         {
-            title = 'Reputation',
-            description = tostring(stats.reputation),
-            icon = 'fas fa-star'
+            title = 'Hours by Type',
+            icon = 'fas fa-chart-pie',
+            disabled = true,
+            metadata = {
+                { label = 'Passenger', value = string.format('%.1f hrs', stats.passenger_hours or 0) },
+                { label = 'Cargo', value = string.format('%.1f hrs', stats.cargo_hours or 0) },
+                { label = 'Charter', value = string.format('%.1f hrs', stats.charter_hours or 0) },
+                { label = 'Ferry', value = string.format('%.1f hrs', stats.ferry_hours or 0) }
+            }
+        },
+        -- Flights and Landings
+        {
+            title = 'Flights & Landings',
+            description = string.format('%d flights | %d landings',
+                stats.total_flights or 0,
+                (stats.day_landings or 0) + (stats.night_landings or 0)
+            ),
+            icon = 'fas fa-plane-arrival',
+            disabled = true,
+            metadata = {
+                { label = 'Total Flights', value = tostring(stats.total_flights or 0) },
+                { label = 'Day Landings', value = tostring(stats.day_landings or 0) },
+                { label = 'Night Landings', value = tostring(stats.night_landings or 0) }
+            }
+        },
+        -- Cargo & Passengers
+        {
+            title = 'Cargo & Passengers',
+            description = string.format('%d passengers | %d kg cargo',
+                stats.total_passengers or 0,
+                stats.total_cargo or 0
+            ),
+            icon = 'fas fa-boxes',
+            disabled = true
+        },
+        -- Earnings
+        {
+            title = 'Total Earnings',
+            description = string.format('$%s', FormatNumber(stats.total_earnings or 0)),
+            icon = 'fas fa-dollar-sign',
+            disabled = true
+        },
+        -- Type Ratings
+        {
+            title = 'Type Ratings',
+            description = stats.type_ratings and #stats.type_ratings > 0
+                and table.concat(stats.type_ratings, ', ')
+                or 'No type ratings yet',
+            icon = 'fas fa-certificate',
+            disabled = true
+        },
+        -- Safety
+        {
+            title = 'Safety Record',
+            description = string.format('%d crashes | %d hard landings',
+                stats.crashes or 0,
+                stats.hard_landings or 0
+            ),
+            icon = stats.crashes and stats.crashes > 0 and 'fas fa-exclamation-triangle' or 'fas fa-shield-alt',
+            disabled = true
+        },
+        -- View Logbook
+        {
+            title = 'My Logbook',
+            description = 'View your flight history',
+            icon = 'fas fa-book',
+            onSelect = function()
+                OpenMyLogbook()
+            end
         }
     }
 
@@ -450,6 +542,65 @@ function OpenStatsMenu()
     })
 
     lib.showContext('airlines_stats_menu')
+end
+
+function OpenMyLogbook()
+    local logbook = lib.callback.await('dps-airlines:server:getPilotLogbook', false, nil, 30, 0)
+
+    local options = {}
+
+    if not logbook or #logbook == 0 then
+        table.insert(options, {
+            title = 'No Flights Yet',
+            description = 'Complete some flights to build your logbook',
+            icon = 'fas fa-plane-slash',
+            disabled = true
+        })
+    else
+        for _, entry in ipairs(logbook) do
+            local fromAirport = Locations.Airports[entry.departure_airport]
+            local toAirport = Locations.Airports[entry.arrival_airport]
+
+            table.insert(options, {
+                title = string.format('%s → %s',
+                    fromAirport and fromAirport.label or entry.departure_airport,
+                    toAirport and toAirport.label or entry.arrival_airport
+                ),
+                description = string.format('%s | %.1f hrs | $%d',
+                    entry.flight_type:upper(),
+                    entry.flight_time or 0,
+                    entry.payment or 0
+                ),
+                icon = 'fas fa-plane',
+                metadata = {
+                    { label = 'Aircraft', value = entry.aircraft_model or 'Unknown' },
+                    { label = 'Flight Time', value = string.format('%.1f hrs', entry.flight_time or 0) },
+                    { label = 'Day/Night', value = entry.day_night or 'day' },
+                    { label = 'VFR/IFR', value = (entry.ifr_vfr or 'vfr'):upper() },
+                    { label = 'Landing', value = entry.landing_quality or 'normal' }
+                }
+            })
+        end
+    end
+
+    lib.registerContext({
+        id = 'airlines_my_logbook',
+        title = 'My Flight Logbook',
+        menu = 'airlines_stats_menu',
+        options = options
+    })
+
+    lib.showContext('airlines_my_logbook')
+end
+
+function FormatNumber(n)
+    if not n then return '0' end
+    local formatted = tostring(math.floor(n))
+    while true do
+        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", '%1,%2')
+        if k == 0 then break end
+    end
+    return formatted
 end
 
 -- =====================================
