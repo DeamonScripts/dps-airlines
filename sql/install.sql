@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS `airline_flights` (
     `plane_model` VARCHAR(50) NOT NULL,
     `passengers` INT DEFAULT 0,
     `cargo_weight` INT DEFAULT 0,
-    `status` ENUM('scheduled', 'boarding', 'departed', 'arrived', 'cancelled') DEFAULT 'scheduled',
+    `status` ENUM('scheduled', 'boarding', 'departed', 'arrived', 'cancelled', 'crashed') DEFAULT 'scheduled',
     `payment` INT DEFAULT 0,
     `started_at` TIMESTAMP NULL,
     `completed_at` TIMESTAMP NULL,
@@ -75,6 +75,57 @@ CREATE TABLE IF NOT EXISTS `airline_dispatch` (
     INDEX `idx_status` (`status`),
     INDEX `idx_assigned` (`assigned_to`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Black Box Flight Recorder
+CREATE TABLE IF NOT EXISTS `airline_blackbox` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `flight_number` VARCHAR(10) NOT NULL,
+    `pilot_citizenid` VARCHAR(50) NOT NULL,
+    `start_time` TIMESTAMP NULL,
+    `end_time` TIMESTAMP NULL,
+    `telemetry_count` INT DEFAULT 0,
+    `events_count` INT DEFAULT 0,
+    `data_summary` TEXT NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_flight` (`flight_number`),
+    INDEX `idx_pilot` (`pilot_citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Crash Records
+CREATE TABLE IF NOT EXISTS `airline_crashes` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `flight_number` VARCHAR(10) NOT NULL,
+    `pilot_citizenid` VARCHAR(50) NOT NULL,
+    `flight_id` INT NULL,
+    `crash_coords` TEXT NULL,
+    `crash_phase` VARCHAR(50) NULL,
+    `crash_time` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `investigation_notes` TEXT NULL,
+    INDEX `idx_pilot` (`pilot_citizenid`),
+    INDEX `idx_flight` (`flight_id`),
+    FOREIGN KEY (`flight_id`) REFERENCES `airline_flights`(`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Checkride Records (for recurrent training)
+CREATE TABLE IF NOT EXISTS `airline_checkrides` (
+    `id` INT AUTO_INCREMENT PRIMARY KEY,
+    `pilot_citizenid` VARCHAR(50) NOT NULL,
+    `checkride_type` ENUM('initial', 'recurrent', 'upgrade') NOT NULL DEFAULT 'recurrent',
+    `status` ENUM('pending', 'passed', 'failed') DEFAULT 'pending',
+    `instructor_citizenid` VARCHAR(50) NULL,
+    `score` INT NULL,
+    `notes` TEXT NULL,
+    `scheduled_at` TIMESTAMP NULL,
+    `completed_at` TIMESTAMP NULL,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX `idx_pilot` (`pilot_citizenid`),
+    INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Add crashes column to pilot stats
+ALTER TABLE `airline_pilot_stats` ADD COLUMN IF NOT EXISTS `crashes` INT DEFAULT 0;
+ALTER TABLE `airline_pilot_stats` ADD COLUMN IF NOT EXISTS `last_flight` TIMESTAMP NULL;
+ALTER TABLE `airline_pilot_stats` ADD COLUMN IF NOT EXISTS `checkride_due` TIMESTAMP NULL;
 
 -- Insert default maintenance records for company planes
 INSERT IGNORE INTO `airline_maintenance` (`plane_model`, `flights_since_service`, `owned_by`) VALUES

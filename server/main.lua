@@ -5,6 +5,109 @@ local ActiveFlights = {}
 local ActiveCharters = {}
 
 -- =====================================
+-- STATE BAG WEATHER SYSTEM
+-- Eliminates client polling - weather synced via GlobalState
+-- =====================================
+
+local CurrentWeatherState = {
+    weather = 'CLEAR',
+    canFly = true,
+    delayMinutes = 0,
+    payBonus = 1.0,
+    lastUpdate = os.time()
+}
+
+-- Initialize global weather state
+CreateThread(function()
+    Wait(1000)
+    GlobalState.airlineWeather = CurrentWeatherState
+    GlobalState.atcStatus = 'operational' -- operational, busy, closed
+    print('^2[dps-airlines]^7 GlobalState weather/ATC initialized')
+end)
+
+-- Periodic weather check and state bag update (server-side only)
+CreateThread(function()
+    while true do
+        Wait(Config.Weather.checkInterval or 60000)
+
+        if Config.Weather.enabled then
+            local weather = GetCurrentServerWeather()
+            local conditions = EvaluateWeatherConditions(weather)
+
+            CurrentWeatherState = {
+                weather = weather,
+                canFly = conditions.canFly,
+                delayMinutes = conditions.delay,
+                payBonus = conditions.bonus,
+                reason = conditions.reason,
+                lastUpdate = os.time()
+            }
+
+            -- Update GlobalState - clients auto-sync
+            GlobalState.airlineWeather = CurrentWeatherState
+
+            -- Notify pilots of weather changes
+            if not conditions.canFly then
+                local players = QBCore.Functions.GetQBPlayers()
+                for _, player in pairs(players) do
+                    if player.PlayerData.job.name == Config.Job and player.PlayerData.job.onduty then
+                        Notify(player.PlayerData.source, 'Weather Alert: ' .. conditions.reason, 'error')
+                    end
+                end
+            end
+        end
+    end
+end)
+
+local function GetCurrentServerWeather()
+    -- Try to get from qb-weathersync
+    local success, weather = pcall(function()
+        return exports['qb-weathersync']:getWeatherState()
+    end)
+
+    if success and weather then
+        return weather
+    end
+
+    return 'CLEAR'
+end
+
+local function EvaluateWeatherConditions(weather)
+    -- Check if grounded
+    for _, grounded in ipairs(Config.Weather.groundedWeather or {}) do
+        if weather == grounded then
+            return {
+                canFly = false,
+                delay = 0,
+                bonus = 1.0,
+                reason = 'All flights grounded due to severe weather'
+            }
+        end
+    end
+
+    -- Check for delays
+    local delayInfo = Config.Weather.delays and Config.Weather.delays[weather]
+    if delayInfo then
+        local roll = math.random(1, 100)
+        if roll <= delayInfo.chance then
+            return {
+                canFly = true,
+                delay = delayInfo.delayMinutes,
+                bonus = delayInfo.payBonus,
+                reason = string.format('%s conditions - %d min delay', weather, delayInfo.delayMinutes)
+            }
+        end
+    end
+
+    return { canFly = true, delay = 0, bonus = 1.0 }
+end
+
+-- Export for other resources
+exports('GetWeatherState', function()
+    return CurrentWeatherState
+end)
+
+-- =====================================
 -- UTILITY FUNCTIONS
 -- =====================================
 
@@ -524,5 +627,296 @@ QBCore.Commands.Add('resetpilotstats', 'Reset pilot stats (Admin)', {
         Notify(source, 'Pilot stats reset', 'success')
     end
 end, 'admin')
+
+-- =====================================
+-- CHECKRIDE SYSTEM (Server)
+-- Recurrent training for inactive pilots
+-- =====================================
+
+local CheckrideConfig = {
+    inactivityDays = 14,
+    warningDays = 10
+}
+
+lib.callback.register('dps-airlines:server:getCheckrideStatus', function(source)
+    local Player = GetPlayer(source)
+    if not Player then return nil end
+
+    local citizenid = Player.PlayerData.citizenid
+    local stats = GetPilotStats(citizenid)
+
+    if not stats.last_flight then
+        -- New pilot, no checkride needed
+        return { required = false, warning = false }
+    end
+
+    -- Calculate days since last flight
+    local lastFlight = MySQL.single.await([[
+        SELECT DATEDIFF(NOW(), completed_at) as days_inactive
+        FROM airline_flights
+        WHERE pilot_citizenid = ? AND status = 'arrived'
+        ORDER BY completed_at DESC
+        LIMIT 1
+    ]], { citizenid })
+
+    if not lastFlight then
+        return { required = false, warning = false }
+    end
+
+    local daysInactive = lastFlight.days_inactive or 0
+
+    if daysInactive >= CheckrideConfig.inactivityDays then
+        -- Check if they already have a pending/recent passed checkride
+        local recentCheckride = MySQL.single.await([[
+            SELECT * FROM airline_checkrides
+            WHERE pilot_citizenid = ? AND status = 'passed'
+            AND completed_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
+        ]], { citizenid })
+
+        if recentCheckride then
+            return { required = false, warning = false }
+        end
+
+        return {
+            required = true,
+            daysInactive = daysInactive
+        }
+    elseif daysInactive >= CheckrideConfig.warningDays then
+        return {
+            required = false,
+            warning = true,
+            daysRemaining = CheckrideConfig.inactivityDays - daysInactive
+        }
+    end
+
+    return { required = false, warning = false }
+end)
+
+RegisterNetEvent('dps-airlines:server:completeCheckride', function(data)
+    local source = source
+    local Player = GetPlayer(source)
+    if not Player then return end
+
+    local citizenid = Player.PlayerData.citizenid
+
+    -- Record checkride result
+    MySQL.insert.await([[
+        INSERT INTO airline_checkrides
+        (pilot_citizenid, checkride_type, status, score, notes, completed_at)
+        VALUES (?, 'recurrent', ?, ?, ?, NOW())
+    ]], {
+        citizenid,
+        data.passed and 'passed' or 'failed',
+        data.score,
+        data.reason or json.encode(data.penalties or {})
+    })
+
+    if data.passed then
+        -- Update last flight to reset the timer
+        MySQL.update.await([[
+            UPDATE airline_pilot_stats
+            SET checkride_due = NULL, last_flight = NOW()
+            WHERE citizenid = ?
+        ]], { citizenid })
+
+        Notify(source, 'Checkride passed! You may now accept flights.', 'success')
+    else
+        Notify(source, 'Checkride failed. Please try again.', 'error')
+    end
+end)
+
+-- Update last_flight when a flight is completed
+local originalCompleteFlight = nil
+AddEventHandler('dps-airlines:server:completeFlight', function()
+    local source = source
+    local Player = GetPlayer(source)
+    if Player then
+        MySQL.update.await('UPDATE airline_pilot_stats SET last_flight = NOW() WHERE citizenid = ?', {
+            Player.PlayerData.citizenid
+        })
+    end
+end)
+
+-- =====================================
+-- BLACK BOX FLIGHT RECORDER (Server)
+-- =====================================
+
+local BlackBoxRecords = {}
+
+RegisterNetEvent('dps-airlines:server:saveBlackBox', function(data)
+    local source = source
+    local Player = GetPlayer(source)
+    if not Player then return end
+
+    local citizenid = Player.PlayerData.citizenid
+
+    -- Store in memory (recent flights only)
+    BlackBoxRecords[data.flightNumber] = {
+        pilot = citizenid,
+        data = data,
+        savedAt = os.time()
+    }
+
+    -- Save summary to database
+    MySQL.insert.await([[
+        INSERT INTO airline_blackbox
+        (flight_number, pilot_citizenid, start_time, end_time, telemetry_count, events_count, data_summary)
+        VALUES (?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?, ?)
+    ]], {
+        data.flightNumber,
+        citizenid,
+        math.floor(data.startTime / 1000),
+        math.floor(data.endTime / 1000),
+        #data.telemetry,
+        #data.events,
+        json.encode({
+            finalPosition = data.telemetry[#data.telemetry],
+            eventTypes = GetEventTypes(data.events)
+        })
+    })
+
+    if Config.Debug then
+        print(string.format('[dps-airlines] BlackBox saved for flight %s (%d points, %d events)',
+            data.flightNumber, #data.telemetry, #data.events))
+    end
+end)
+
+local function GetEventTypes(events)
+    local types = {}
+    for _, event in ipairs(events) do
+        types[event.type] = (types[event.type] or 0) + 1
+    end
+    return types
+end
+
+RegisterNetEvent('dps-airlines:server:flightCrashed', function(data)
+    local source = source
+    local Player = GetPlayer(source)
+    if not Player then return end
+
+    local citizenid = Player.PlayerData.citizenid
+    local flight = ActiveFlights[source]
+
+    -- Log crash
+    MySQL.insert.await([[
+        INSERT INTO airline_crashes
+        (flight_number, pilot_citizenid, crash_coords, crash_phase, flight_id, crash_time)
+        VALUES (?, ?, ?, ?, ?, NOW())
+    ]], {
+        data.flightNumber,
+        citizenid,
+        json.encode(data.coords),
+        data.phase,
+        flight and flight.id or nil
+    })
+
+    -- Update flight status
+    if flight then
+        MySQL.update.await('UPDATE airline_flights SET status = ?, completed_at = NOW() WHERE id = ?', {
+            'crashed',
+            flight.id
+        })
+    end
+
+    -- Update pilot stats (no rep penalty, just track crashes)
+    MySQL.update.await([[
+        UPDATE airline_pilot_stats
+        SET crashes = COALESCE(crashes, 0) + 1
+        WHERE citizenid = ?
+    ]], { citizenid })
+
+    Notify(source, 'Flight incident has been recorded', 'warning')
+
+    -- Clear active flight
+    ActiveFlights[source] = nil
+end)
+
+RegisterNetEvent('dps-airlines:server:requestRecoveryAircraft', function(data)
+    local source = source
+    local Player = GetPlayer(source)
+    if not Player then return end
+
+    -- Check if eligible for recovery (insurance check could go here)
+    local canRecover = true
+
+    if canRecover then
+        -- Notify client to spawn replacement
+        TriggerClientEvent('dps-airlines:client:recoveryApproved', source, {
+            destination = data.destination,
+            passengers = data.passengers,
+            cargo = data.cargo
+        })
+
+        Notify(source, 'Recovery aircraft approved. Head to the hangar.', 'success')
+    else
+        Notify(source, 'Recovery not available at this time', 'error')
+    end
+end)
+
+lib.callback.register('dps-airlines:server:getBlackBoxData', function(source, flightNumber)
+    if BlackBoxRecords[flightNumber] then
+        return BlackBoxRecords[flightNumber].data
+    end
+
+    -- Try to get from database
+    local record = MySQL.single.await([[
+        SELECT * FROM airline_blackbox WHERE flight_number = ?
+    ]], { flightNumber })
+
+    return record
+end)
+
+lib.callback.register('dps-airlines:server:getCrashHistory', function(source)
+    local Player = GetPlayer(source)
+    if not Player then return {} end
+
+    -- Bosses can see all, pilots see their own
+    local citizenid = Player.PlayerData.citizenid
+    local isBoss = Player.PlayerData.job.grade.level >= Config.BossGrade
+
+    local crashes
+    if isBoss then
+        crashes = MySQL.query.await([[
+            SELECT c.*, f.from_airport, f.to_airport, f.plane_model
+            FROM airline_crashes c
+            LEFT JOIN airline_flights f ON c.flight_id = f.id
+            ORDER BY c.crash_time DESC
+            LIMIT 20
+        ]])
+    else
+        crashes = MySQL.query.await([[
+            SELECT c.*, f.from_airport, f.to_airport, f.plane_model
+            FROM airline_crashes c
+            LEFT JOIN airline_flights f ON c.flight_id = f.id
+            WHERE c.pilot_citizenid = ?
+            ORDER BY c.crash_time DESC
+            LIMIT 10
+        ]], { citizenid })
+    end
+
+    return crashes or {}
+end)
+
+-- Cleanup old blackbox records from memory periodically
+CreateThread(function()
+    while true do
+        Wait(300000) -- Every 5 minutes
+
+        local now = os.time()
+        local cleaned = 0
+
+        for flightNumber, record in pairs(BlackBoxRecords) do
+            -- Remove records older than 1 hour
+            if now - record.savedAt > 3600 then
+                BlackBoxRecords[flightNumber] = nil
+                cleaned = cleaned + 1
+            end
+        end
+
+        if cleaned > 0 and Config.Debug then
+            print('[dps-airlines] Cleaned ' .. cleaned .. ' old blackbox records from memory')
+        end
+    end
+end)
 
 print('^2[dps-airlines]^7 Server loaded')

@@ -7,6 +7,134 @@ local FlightPhase = 'ground' -- ground, taxiing, takeoff, cruise, approach, land
 local WeatherDelay = nil
 
 -- =====================================
+-- STATE BAG WEATHER LISTENER
+-- No polling - reacts to GlobalState changes
+-- =====================================
+
+local CachedWeather = {
+    weather = 'CLEAR',
+    canFly = true,
+    delayMinutes = 0,
+    payBonus = 1.0
+}
+
+-- Listen for weather state changes from server
+AddStateBagChangeHandler('airlineWeather', 'global', function(bagName, key, value)
+    if not value then return end
+
+    local oldWeather = CachedWeather
+    CachedWeather = value
+
+    -- Only notify if on duty and weather changed significantly
+    if OnDuty then
+        if oldWeather.canFly and not value.canFly then
+            lib.notify({
+                title = 'Weather Alert',
+                description = value.reason or 'Flights grounded due to weather',
+                type = 'error',
+                duration = 10000
+            })
+        elseif not oldWeather.canFly and value.canFly then
+            lib.notify({
+                title = 'Weather Update',
+                description = 'Weather has cleared - flights resumed',
+                type = 'success',
+                duration = 5000
+            })
+        elseif value.delayMinutes > 0 and oldWeather.delayMinutes == 0 then
+            lib.notify({
+                title = 'Weather Delay',
+                description = string.format('%s conditions - %d min delays possible',
+                    value.weather, value.delayMinutes),
+                type = 'warning',
+                duration = 7000
+            })
+        end
+    end
+
+    if Config.Debug then
+        print('[dps-airlines] Weather state updated: ' .. json.encode(value))
+    end
+end)
+
+-- Listen for ATC status changes
+AddStateBagChangeHandler('atcStatus', 'global', function(bagName, key, value)
+    if not value then return end
+
+    if OnDuty then
+        if value == 'closed' then
+            lib.notify({
+                title = 'ATC',
+                description = 'ATC services temporarily unavailable',
+                type = 'warning'
+            })
+        elseif value == 'busy' then
+            lib.notify({
+                title = 'ATC',
+                description = 'Heavy traffic - expect delays',
+                type = 'inform'
+            })
+        end
+    end
+end)
+
+-- Get current weather from cache (no callback needed)
+function GetCachedWeather()
+    return CachedWeather
+end
+
+exports('GetCachedWeather', GetCachedWeather)
+
+-- =====================================
+-- ALTITUDE-BASED THROTTLING SYSTEM
+-- Optimizes CPU by reducing checks at cruising altitude
+-- =====================================
+
+local ThrottleTiers = {
+    ground = 100,       -- On ground or <50m - high precision for markers/interactions
+    lowAltitude = 500,  -- 50-200m - approaching/departing
+    midAltitude = 1000, -- 200-500m - climbing/descending
+    cruising = 5000     -- >500m - deep sleep, just check for crash/destination
+}
+
+local currentThrottleRate = ThrottleTiers.ground
+local lastAltitude = 0
+local lastSpeed = 0
+
+-- Get optimal tick rate based on flight state
+local function GetFlightThrottleRate()
+    if not CurrentPlane or not DoesEntityExist(CurrentPlane) then
+        return ThrottleTiers.ground
+    end
+
+    local ped = PlayerPedId()
+    if not IsPedInVehicle(ped, CurrentPlane, false) then
+        return ThrottleTiers.ground
+    end
+
+    local altitude = GetEntityCoords(CurrentPlane).z
+    local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
+    lastAltitude = heightAboveGround
+    lastSpeed = GetEntitySpeed(CurrentPlane) * 3.6 -- km/h
+
+    -- Use height above ground for more accurate detection
+    if heightAboveGround < 50.0 then
+        return ThrottleTiers.ground
+    elseif heightAboveGround < 200.0 then
+        return ThrottleTiers.lowAltitude
+    elseif heightAboveGround < 500.0 then
+        return ThrottleTiers.midAltitude
+    else
+        return ThrottleTiers.cruising
+    end
+end
+
+-- Export for other scripts to check current throttle state
+exports('GetFlightThrottleRate', function()
+    return currentThrottleRate, lastAltitude, lastSpeed
+end)
+
+-- =====================================
 -- ATC / CLEARANCE SYSTEM
 -- =====================================
 
@@ -76,50 +204,25 @@ function ResetClearance()
 end
 
 -- =====================================
--- WEATHER SYSTEM
+-- WEATHER SYSTEM (STATE BAG DRIVEN)
+-- Uses cached state from GlobalState - no polling
 -- =====================================
-
-local function GetCurrentWeather()
-    -- Get weather from qb-weathersync or similar
-    local weather = exports['qb-weathersync']:getWeatherState() if exports['qb-weathersync'] then
-        return exports['qb-weathersync']:getWeatherState()
-    end
-    return 'CLEAR'
-end
 
 function CheckWeatherConditions()
     if not Config.Weather.enabled then
         return { canFly = true, delay = 0, bonus = 1.0 }
     end
 
-    local weather = GetCurrentWeather()
+    -- Use cached state from GlobalState (updated via state bag listener)
+    local weather = CachedWeather
 
-    -- Check if grounded
-    for _, grounded in ipairs(Config.Weather.groundedWeather) do
-        if weather == grounded then
-            return {
-                canFly = false,
-                reason = 'All flights grounded due to severe weather',
-                weather = weather
-            }
-        end
-    end
-
-    -- Check for delays
-    local delayInfo = Config.Weather.delays[weather]
-    if delayInfo then
-        local roll = math.random(1, 100)
-        if roll <= delayInfo.chance then
-            return {
-                canFly = true,
-                delay = delayInfo.delayMinutes,
-                bonus = delayInfo.payBonus,
-                weather = weather
-            }
-        end
-    end
-
-    return { canFly = true, delay = 0, bonus = 1.0, weather = weather }
+    return {
+        canFly = weather.canFly,
+        delay = weather.delayMinutes or 0,
+        bonus = weather.payBonus or 1.0,
+        weather = weather.weather,
+        reason = weather.reason
+    }
 end
 
 function ApplyWeatherDelay()
@@ -195,36 +298,58 @@ function GetFlightPhase()
     return FlightPhase
 end
 
--- Monitor altitude and speed for flight phases
+-- Monitor altitude and speed for flight phases (with dynamic throttling)
 CreateThread(function()
     while true do
-        Wait(2000)
+        -- Use dynamic throttle rate based on altitude
+        currentThrottleRate = GetFlightThrottleRate()
+        Wait(currentThrottleRate)
 
         if CurrentFlight and CurrentPlane and DoesEntityExist(CurrentPlane) then
             local ped = PlayerPedId()
             if IsPedInVehicle(ped, CurrentPlane, false) then
-                local altitude = GetEntityCoords(CurrentPlane).z
+                local coords = GetEntityCoords(CurrentPlane)
+                local altitude = coords.z
+                local heightAboveGround = GetEntityHeightAboveGround(CurrentPlane)
                 local speed = GetEntitySpeed(CurrentPlane) * 3.6 -- km/h
+
+                -- Update state bag for other clients (if enabled)
+                if LocalPlayer.state.flightStatus then
+                    LocalPlayer.state:set('flightAltitude', heightAboveGround, true)
+                    LocalPlayer.state:set('flightSpeed', speed, true)
+                    LocalPlayer.state:set('flightPhase', FlightPhase, true)
+                end
 
                 if FlightPhase == 'ground' and speed > 50 then
                     SetFlightPhase('takeoff')
-                elseif FlightPhase == 'takeoff' and altitude > 500 then
+                elseif FlightPhase == 'takeoff' and heightAboveGround > 150 then
                     SetFlightPhase('cruise')
                 elseif FlightPhase == 'cruise' then
-                    -- Check proximity to destination
+                    -- Check proximity to destination (only at cruising intervals)
                     local dest = Locations.Airports[CurrentFlight.to]
                     if dest then
-                        local dist = #(GetEntityCoords(CurrentPlane) - vector3(dest.coords.x, dest.coords.y, dest.coords.z))
-                        if dist < 2000 and altitude < 300 then
+                        local dist = #(coords - vector3(dest.coords.x, dest.coords.y, dest.coords.z))
+                        if dist < 2000 and heightAboveGround < 300 then
                             SetFlightPhase('approach')
                         end
                     end
-                elseif FlightPhase == 'approach' and IsEntityOnScreen(CurrentPlane) and GetEntityHeightAboveGround(CurrentPlane) < 5 and speed < 30 then
+                elseif FlightPhase == 'approach' and heightAboveGround < 5 and speed < 30 then
                     SetFlightPhase('landed')
+                end
+
+                -- Crash detection (check at all altitudes)
+                local health = GetEntityHealth(CurrentPlane)
+                if health < 100 or IsEntityDead(CurrentPlane) then
+                    TriggerEvent('dps-airlines:client:planeCrashed', {
+                        coords = coords,
+                        flightNumber = CurrentFlight.flightNumber or CurrentCallsign,
+                        phase = FlightPhase
+                    })
                 end
             end
         else
             FlightPhase = 'ground'
+            currentThrottleRate = ThrottleTiers.ground
         end
     end
 end)

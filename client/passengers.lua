@@ -2,10 +2,12 @@
 local QBCore = exports['qb-core']:GetCoreObject()
 
 local PassengerPeds = {}
+local SeatedPassengers = {}  -- Passengers currently "in" the plane
 local BoardingInProgress = false
 
 -- =====================================
 -- PASSENGER NPC FUNCTIONS
+-- With Logic Culling optimization
 -- =====================================
 
 local function GetRandomPassengerModel()
@@ -23,6 +25,62 @@ local function SpawnPassengerPed(coords)
 
     return ped
 end
+
+-- =====================================
+-- NPC LOGIC CULLING
+-- Freeze passengers once seated to prevent physics/pathing calculations
+-- =====================================
+
+local function SeatPassengerInPlane(ped, plane)
+    if not DoesEntityExist(ped) or not DoesEntityExist(plane) then return end
+
+    -- Mark as mission entity to prevent cleanup
+    SetEntityAsMissionEntity(ped, true, true)
+
+    -- Freeze the ped completely - no physics, no AI
+    FreezeEntityPosition(ped, true)
+    SetEntityCollision(ped, false, false)
+    SetEntityVisible(ped, false, false)  -- Hide since they're "inside"
+    SetEntityInvincible(ped, true)
+
+    -- Stop all AI processing
+    SetBlockingOfNonTemporaryEvents(ped, true)
+    SetPedCanRagdoll(ped, false)
+
+    -- Track as seated
+    SeatedPassengers[ped] = {
+        plane = plane,
+        seatedAt = GetGameTimer()
+    }
+
+    if Config.Debug then
+        print('[dps-airlines] Passenger seated and frozen: ' .. ped)
+    end
+end
+
+local function UnfreezePassenger(ped)
+    if not DoesEntityExist(ped) then return end
+
+    FreezeEntityPosition(ped, false)
+    SetEntityCollision(ped, true, true)
+    SetEntityVisible(ped, true, true)
+    SetEntityInvincible(ped, false)
+    SetBlockingOfNonTemporaryEvents(ped, false)
+    SetPedCanRagdoll(ped, true)
+
+    SeatedPassengers[ped] = nil
+end
+
+-- Get count of currently seated passengers
+function GetSeatedPassengerCount()
+    local count = 0
+    for _ in pairs(SeatedPassengers) do
+        count = count + 1
+    end
+    return count
+end
+
+exports('GetSeatedPassengerCount', GetSeatedPassengerCount)
 
 -- =====================================
 -- BOARDING SYSTEM
