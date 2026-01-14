@@ -1,6 +1,5 @@
 -- Black Box Flight Data Recorder
 -- Records flight telemetry for crash analysis and recovery
-local QBCore = exports['qb-core']:GetCoreObject()
 
 -- =====================================
 -- BLACK BOX DATA STRUCTURE

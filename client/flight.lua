@@ -1,6 +1,4 @@
 -- Flight & ATC System
-local QBCore = exports['qb-core']:GetCoreObject()
-
 local CurrentCallsign = nil
 local HasClearance = false
 local FlightPhase = 'ground' -- ground, taxiing, takeoff, cruise, approach, landed

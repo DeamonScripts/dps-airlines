@@ -1,18 +1,36 @@
 fx_version 'cerulean'
 game 'gta5'
+lua54 'yes'
 
+name 'dps-airlines'
 author 'DPSRP'
-description 'Advanced Airlines Job System'
-version '2.2.0'
+description 'Advanced Airlines Job System - Multi-Framework'
+version '3.0.0'
+repository 'https://github.com/DaemonAlex/dps-airlines'
 
 shared_scripts {
     '@ox_lib/init.lua',
-    '@qb-core/shared/locale.lua',
     'shared/config.lua',
     'shared/locations.lua',
+    'bridge/init.lua',
+}
+
+server_scripts {
+    '@oxmysql/lib/MySQL.lua',
+    'bridge/server.lua',
+    'server/main.lua',
+    'server/flights.lua',
+    'server/logbook.lua',
+    'server/ferry.lua',
+    'server/charter.lua',
+    'server/charter_requests.lua',
+    'server/boss.lua',
+    'server/dispatch.lua',
+    'server/emergencies.lua',
 }
 
 client_scripts {
+    'bridge/client.lua',
     'client/main.lua',
     'client/flight.lua',
     'client/passengers.lua',
@@ -30,19 +48,6 @@ client_scripts {
     'client/emergencies.lua',
 }
 
-server_scripts {
-    '@oxmysql/lib/MySQL.lua',
-    'server/main.lua',
-    'server/flights.lua',
-    'server/logbook.lua',
-    'server/ferry.lua',
-    'server/charter.lua',
-    'server/charter_requests.lua',
-    'server/boss.lua',
-    'server/dispatch.lua',
-    'server/emergencies.lua',
-}
-
 ui_page 'html/index.html'
 
 files {
@@ -51,10 +56,14 @@ files {
     'html/js/*.js',
 }
 
-lua54 'yes'
-
 dependencies {
     'ox_lib',
-    'qb-core',
     'oxmysql',
+}
+
+-- Optional dependencies (auto-detected)
+-- qb-core, qbx_core, or es_extended
+
+provides {
+    'dps-airlines'
 }

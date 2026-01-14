@@ -1,5 +1,3 @@
-local QBCore = exports['qb-core']:GetCoreObject()
-
 -- Active flights tracking
 local ActiveFlights = {}
 local ActiveCharters = {}
@@ -19,16 +17,8 @@ local CurrentWeatherState = {
 
 -- Weather helper functions (defined before use)
 local function GetCurrentServerWeather()
-    -- Try to get from qb-weathersync
-    local success, weather = pcall(function()
-        return exports['qb-weathersync']:getWeatherState()
-    end)
-
-    if success and weather then
-        return weather
-    end
-
-    return 'CLEAR'
+    -- Use bridge for weather detection
+    return Bridge.GetCurrentWeather()
 end
 
 local function EvaluateWeatherConditions(weather)
@@ -92,10 +82,10 @@ CreateThread(function()
 
             -- Notify pilots of weather changes
             if not conditions.canFly then
-                local players = QBCore.Functions.GetQBPlayers()
-                for _, player in pairs(players) do
-                    if player.PlayerData.job.name == Config.Job and player.PlayerData.job.onduty then
-                        Notify(player.PlayerData.source, 'Weather Alert: ' .. conditions.reason, 'error')
+                local pilots = Bridge.GetPlayersByJob(Config.Job)
+                for _, pilot in pairs(pilots) do
+                    if pilot.onDuty then
+                        Bridge.Notify(pilot.source, 'Airlines', 'Weather Alert: ' .. conditions.reason, 'error')
                     end
                 end
             end
@@ -112,16 +102,8 @@ end)
 -- UTILITY FUNCTIONS
 -- =====================================
 
-local function GetPlayer(source)
-    return QBCore.Functions.GetPlayer(source)
-end
-
 local function Notify(source, msg, type)
-    TriggerClientEvent('ox_lib:notify', source, {
-        title = 'Airlines',
-        description = msg,
-        type = type or 'inform'
-    })
+    Bridge.Notify(source, 'Airlines', msg, type or 'inform')
 end
 
 local function GenerateFlightNumber()
@@ -130,12 +112,12 @@ local function GenerateFlightNumber()
     return string.format(Config.ATC.callsigns.format, prefix, num)
 end
 
-local function GetPilotStats(citizenid)
-    local result = MySQL.single.await('SELECT * FROM airline_pilot_stats WHERE citizenid = ?', { citizenid })
+local function GetPilotStats(identifier)
+    local result = MySQL.single.await('SELECT * FROM airline_pilot_stats WHERE citizenid = ?', { identifier })
     if not result then
-        MySQL.insert.await('INSERT INTO airline_pilot_stats (citizenid) VALUES (?)', { citizenid })
+        MySQL.insert.await('INSERT INTO airline_pilot_stats (citizenid) VALUES (?)', { identifier })
         return {
-            citizenid = citizenid,
+            citizenid = identifier,
             total_flights = 0,
             total_passengers = 0,
             total_cargo = 0,
@@ -199,12 +181,11 @@ end
 -- =====================================
 
 lib.callback.register('dps-airlines:server:getPlayerData', function(source)
-    local Player = GetPlayer(source)
-    if not Player then return nil end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return nil end
 
-    local citizenid = Player.PlayerData.citizenid
-    local stats = GetPilotStats(citizenid)
-    local job = Player.PlayerData.job
+    local stats = GetPilotStats(identifier)
+    local job = Bridge.GetPlayerJob(source)
 
     -- Get available planes based on reputation
     local availablePlanes = {}
@@ -215,19 +196,19 @@ lib.callback.register('dps-airlines:server:getPlayerData', function(source)
     end
 
     return {
-        citizenid = citizenid,
+        citizenid = identifier,
         job = job,
         stats = stats,
         availablePlanes = availablePlanes,
         hasLicense = stats.license_obtained ~= nil,
-        onDuty = job.onduty
+        onDuty = Bridge.IsOnDuty(source)
     }
 end)
 
 lib.callback.register('dps-airlines:server:getPilotStats', function(source)
-    local Player = GetPlayer(source)
-    if not Player then return nil end
-    return GetPilotStats(Player.PlayerData.citizenid)
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return nil end
+    return GetPilotStats(identifier)
 end)
 
 lib.callback.register('dps-airlines:server:getMaintenanceStatus', function(source, model)
@@ -235,10 +216,10 @@ lib.callback.register('dps-airlines:server:getMaintenanceStatus', function(sourc
 end)
 
 lib.callback.register('dps-airlines:server:canUsePlane', function(source, model)
-    local Player = GetPlayer(source)
-    if not Player then return false, 'Player not found' end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return false, 'Player not found' end
 
-    local stats = GetPilotStats(Player.PlayerData.citizenid)
+    local stats = GetPilotStats(identifier)
     local planeData = Config.Planes[model]
 
     if not planeData then
@@ -261,11 +242,10 @@ lib.callback.register('dps-airlines:server:canUsePlane', function(source, model)
 end)
 
 lib.callback.register('dps-airlines:server:getAvailableFlights', function(source)
-    local Player = GetPlayer(source)
-    if not Player then return {} end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return {} end
 
-    local citizenid = Player.PlayerData.citizenid
-    local stats = GetPilotStats(citizenid)
+    local stats = GetPilotStats(identifier)
 
     local flights = MySQL.query.await([[
         SELECT * FROM airline_dispatch
@@ -304,16 +284,16 @@ end)
 
 RegisterNetEvent('dps-airlines:server:toggleDuty', function()
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local jobName = Bridge.GetJobName(source)
 
-    if Player.PlayerData.job.name ~= Config.Job then
+    if jobName ~= Config.Job then
         Notify(source, 'You are not a pilot', 'error')
         return
     end
 
-    local onDuty = not Player.PlayerData.job.onduty
-    Player.Functions.SetJobDuty(onDuty)
+    local currentDuty = Bridge.IsOnDuty(source)
+    local onDuty = not currentDuty
+    Bridge.SetJobDuty(source, onDuty)
 
     Notify(source, onDuty and 'You are now on duty' or 'You are now off duty', 'success')
     TriggerClientEvent('dps-airlines:client:dutyChanged', source, onDuty)
@@ -321,10 +301,9 @@ end)
 
 RegisterNetEvent('dps-airlines:server:startFlight', function(data)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
-    local citizenid = Player.PlayerData.citizenid
     local flightNumber = GenerateFlightNumber()
 
     -- Create flight record
@@ -334,7 +313,7 @@ RegisterNetEvent('dps-airlines:server:startFlight', function(data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'departed', NOW())
     ]], {
         flightNumber,
-        citizenid,
+        identifier,
         data.from,
         data.to,
         data.flightType,
@@ -370,8 +349,8 @@ end)
 
 RegisterNetEvent('dps-airlines:server:completeFlight', function(landingData)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
     local flight = ActiveFlights[source]
     if not flight then
@@ -379,7 +358,6 @@ RegisterNetEvent('dps-airlines:server:completeFlight', function(landingData)
         return
     end
 
-    local citizenid = Player.PlayerData.citizenid
     local planeData = Config.Planes[flight.plane]
     local destAirport = Locations.Airports[flight.to]
 
@@ -442,20 +420,20 @@ RegisterNetEvent('dps-airlines:server:completeFlight', function(landingData)
 
     -- Use the logbook system to track detailed stats
     pcall(function()
-        exports['dps-airlines']:CreateLogbookEntry(citizenid, logbookData)
+        exports['dps-airlines']:CreateLogbookEntry(identifier, logbookData)
     end)
 
     -- Pay the player
     if Config.UseSocietyFunds then
-        local success = exports['qb-management']:RemoveMoney('pilot', totalPay)
+        local success = Bridge.RemoveSocietyMoney(Config.Job, totalPay)
         if success then
-            Player.Functions.AddMoney(Config.PaymentAccount, totalPay, 'airline-flight-payment')
+            Bridge.AddMoney(source, Config.PaymentAccount, totalPay, 'airline-flight-payment')
         else
             -- Fallback to direct payment if society doesn't have funds
-            Player.Functions.AddMoney(Config.PaymentAccount, totalPay, 'airline-flight-payment')
+            Bridge.AddMoney(source, Config.PaymentAccount, totalPay, 'airline-flight-payment')
         end
     else
-        Player.Functions.AddMoney(Config.PaymentAccount, totalPay, 'airline-flight-payment')
+        Bridge.AddMoney(source, Config.PaymentAccount, totalPay, 'airline-flight-payment')
     end
 
     -- Clear active flight
@@ -486,8 +464,7 @@ end)
 
 RegisterNetEvent('dps-airlines:server:servicePlane', function(model)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local gradeLevel = Bridge.GetJobGrade(source)
 
     local planeData = Config.Planes[model]
     if not planeData then return end
@@ -496,8 +473,8 @@ RegisterNetEvent('dps-airlines:server:servicePlane', function(model)
 
     -- Check if player has money (for boss) or use society
     local canPay = false
-    if Player.PlayerData.job.grade.level >= Config.BossGrade then
-        canPay = exports['qb-management']:RemoveMoney('pilot', cost)
+    if gradeLevel >= Config.BossGrade then
+        canPay = Bridge.RemoveSocietyMoney(Config.Job, cost)
     end
 
     if canPay then
@@ -515,8 +492,6 @@ end)
 
 RegisterNetEvent('dps-airlines:server:startLesson', function(lessonId)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
 
     local lesson = nil
     for _, l in ipairs(Config.FlightSchool.lessons) do
@@ -536,11 +511,10 @@ end)
 
 RegisterNetEvent('dps-airlines:server:completeLesson', function(lessonId)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
-    local citizenid = Player.PlayerData.citizenid
-    local stats = GetPilotStats(citizenid)
+    local stats = GetPilotStats(identifier)
 
     local lessons = json.decode(stats.lessons_completed) or {}
 
@@ -565,10 +539,10 @@ RegisterNetEvent('dps-airlines:server:completeLesson', function(lessonId)
 
     MySQL.update.await('UPDATE airline_pilot_stats SET lessons_completed = ? WHERE citizenid = ?', {
         json.encode(lessons),
-        citizenid
+        identifier
     })
 
-    Player.Functions.AddMoney('cash', reward, 'flight-lesson-reward')
+    Bridge.AddMoney(source, 'cash', reward, 'flight-lesson-reward')
     Notify(source, string.format('Lesson completed! Earned $%d', reward), 'success')
 
     -- Check if all lessons completed
@@ -579,11 +553,10 @@ end)
 
 RegisterNetEvent('dps-airlines:server:purchaseLicense', function()
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
-    local citizenid = Player.PlayerData.citizenid
-    local stats = GetPilotStats(citizenid)
+    local stats = GetPilotStats(identifier)
 
     if stats.license_obtained then
         Notify(source, 'You already have a pilot license', 'error')
@@ -597,13 +570,18 @@ RegisterNetEvent('dps-airlines:server:purchaseLicense', function()
     end
 
     local cost = Config.FlightSchool.licenseCost
-    if Player.Functions.RemoveMoney('cash', cost, 'pilot-license-purchase') or
-       Player.Functions.RemoveMoney('bank', cost, 'pilot-license-purchase') then
 
-        MySQL.update.await('UPDATE airline_pilot_stats SET license_obtained = NOW() WHERE citizenid = ?', { citizenid })
+    -- Try to remove money from cash first, then bank
+    local paid = Bridge.RemoveMoney(source, 'cash', cost, 'pilot-license-purchase')
+    if not paid then
+        paid = Bridge.RemoveMoney(source, 'bank', cost, 'pilot-license-purchase')
+    end
 
-        -- Give license item
-        exports['ox_inventory']:AddItem(source, 'pilots_license', 1)
+    if paid then
+        MySQL.update.await('UPDATE airline_pilot_stats SET license_obtained = NOW() WHERE citizenid = ?', { identifier })
+
+        -- Give license item via bridge
+        Bridge.AddItem(source, 'pilots_license', 1)
 
         Notify(source, 'Congratulations! You are now a licensed pilot!', 'success')
     else
@@ -630,7 +608,7 @@ end)
 -- ADMIN COMMANDS
 -- =====================================
 
-QBCore.Commands.Add('setpilotgrade', 'Set pilot job grade (Admin)', {
+Bridge.AddCommand('setpilotgrade', 'Set pilot job grade (Admin)', {
     { name = 'id', help = 'Player ID' },
     { name = 'grade', help = 'Grade (0-2)' }
 }, true, function(source, args)
@@ -639,26 +617,24 @@ QBCore.Commands.Add('setpilotgrade', 'Set pilot job grade (Admin)', {
 
     if not targetId or not grade then return end
 
-    local Player = QBCore.Functions.GetPlayer(targetId)
-    if Player then
-        Player.Functions.SetJob('pilot', grade)
+    if Bridge.SetJob(targetId, 'pilot', grade) then
         Notify(source, 'Pilot grade updated', 'success')
         Notify(targetId, 'Your pilot grade has been updated', 'success')
     end
-end, 'admin')
+end)
 
-QBCore.Commands.Add('resetpilotstats', 'Reset pilot stats (Admin)', {
+Bridge.AddCommand('resetpilotstats', 'Reset pilot stats (Admin)', {
     { name = 'id', help = 'Player ID' }
 }, true, function(source, args)
     local targetId = tonumber(args[1])
     if not targetId then return end
 
-    local Player = QBCore.Functions.GetPlayer(targetId)
-    if Player then
-        MySQL.update.await('DELETE FROM airline_pilot_stats WHERE citizenid = ?', { Player.PlayerData.citizenid })
+    local identifier = Bridge.GetIdentifier(targetId)
+    if identifier then
+        MySQL.update.await('DELETE FROM airline_pilot_stats WHERE citizenid = ?', { identifier })
         Notify(source, 'Pilot stats reset', 'success')
     end
-end, 'admin')
+end)
 
 -- =====================================
 -- CHECKRIDE SYSTEM (Server)
@@ -671,11 +647,10 @@ local CheckrideConfig = {
 }
 
 lib.callback.register('dps-airlines:server:getCheckrideStatus', function(source)
-    local Player = GetPlayer(source)
-    if not Player then return nil end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return nil end
 
-    local citizenid = Player.PlayerData.citizenid
-    local stats = GetPilotStats(citizenid)
+    local stats = GetPilotStats(identifier)
 
     if not stats.last_flight then
         -- New pilot, no checkride needed
@@ -689,7 +664,7 @@ lib.callback.register('dps-airlines:server:getCheckrideStatus', function(source)
         WHERE pilot_citizenid = ? AND status = 'arrived'
         ORDER BY completed_at DESC
         LIMIT 1
-    ]], { citizenid })
+    ]], { identifier })
 
     if not lastFlight then
         return { required = false, warning = false }
@@ -703,7 +678,7 @@ lib.callback.register('dps-airlines:server:getCheckrideStatus', function(source)
             SELECT * FROM airline_checkrides
             WHERE pilot_citizenid = ? AND status = 'passed'
             AND completed_at > DATE_SUB(NOW(), INTERVAL 1 DAY)
-        ]], { citizenid })
+        ]], { identifier })
 
         if recentCheckride then
             return { required = false, warning = false }
@@ -726,10 +701,8 @@ end)
 
 RegisterNetEvent('dps-airlines:server:completeCheckride', function(data)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
-
-    local citizenid = Player.PlayerData.citizenid
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
     -- Record checkride result
     MySQL.insert.await([[
@@ -737,7 +710,7 @@ RegisterNetEvent('dps-airlines:server:completeCheckride', function(data)
         (pilot_citizenid, checkride_type, status, score, notes, completed_at)
         VALUES (?, 'recurrent', ?, ?, ?, NOW())
     ]], {
-        citizenid,
+        identifier,
         data.passed and 'passed' or 'failed',
         data.score,
         data.reason or json.encode(data.penalties or {})
@@ -749,7 +722,7 @@ RegisterNetEvent('dps-airlines:server:completeCheckride', function(data)
             UPDATE airline_pilot_stats
             SET checkride_due = NULL, last_flight = NOW()
             WHERE citizenid = ?
-        ]], { citizenid })
+        ]], { identifier })
 
         Notify(source, 'Checkride passed! You may now accept flights.', 'success')
     else
@@ -758,13 +731,12 @@ RegisterNetEvent('dps-airlines:server:completeCheckride', function(data)
 end)
 
 -- Update last_flight when a flight is completed
-local originalCompleteFlight = nil
 AddEventHandler('dps-airlines:server:completeFlight', function()
     local source = source
-    local Player = GetPlayer(source)
-    if Player then
+    local identifier = Bridge.GetIdentifier(source)
+    if identifier then
         MySQL.update.await('UPDATE airline_pilot_stats SET last_flight = NOW() WHERE citizenid = ?', {
-            Player.PlayerData.citizenid
+            identifier
         })
     end
 end)
@@ -777,14 +749,12 @@ local BlackBoxRecords = {}
 
 RegisterNetEvent('dps-airlines:server:saveBlackBox', function(data)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
-
-    local citizenid = Player.PlayerData.citizenid
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
     -- Store in memory (recent flights only)
     BlackBoxRecords[data.flightNumber] = {
-        pilot = citizenid,
+        pilot = identifier,
         data = data,
         savedAt = os.time()
     }
@@ -796,7 +766,7 @@ RegisterNetEvent('dps-airlines:server:saveBlackBox', function(data)
         VALUES (?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?, ?)
     ]], {
         data.flightNumber,
-        citizenid,
+        identifier,
         math.floor(data.startTime / 1000),
         math.floor(data.endTime / 1000),
         #data.telemetry,
@@ -823,10 +793,9 @@ end
 
 RegisterNetEvent('dps-airlines:server:flightCrashed', function(data)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return end
 
-    local citizenid = Player.PlayerData.citizenid
     local flight = ActiveFlights[source]
 
     -- Log crash
@@ -836,7 +805,7 @@ RegisterNetEvent('dps-airlines:server:flightCrashed', function(data)
         VALUES (?, ?, ?, ?, ?, NOW())
     ]], {
         data.flightNumber,
-        citizenid,
+        identifier,
         json.encode(data.coords),
         data.phase,
         flight and flight.id or nil
@@ -855,7 +824,7 @@ RegisterNetEvent('dps-airlines:server:flightCrashed', function(data)
         UPDATE airline_pilot_stats
         SET crashes = COALESCE(crashes, 0) + 1
         WHERE citizenid = ?
-    ]], { citizenid })
+    ]], { identifier })
 
     Notify(source, 'Flight incident has been recorded', 'warning')
 
@@ -865,8 +834,6 @@ end)
 
 RegisterNetEvent('dps-airlines:server:requestRecoveryAircraft', function(data)
     local source = source
-    local Player = GetPlayer(source)
-    if not Player then return end
 
     -- Check if eligible for recovery (insurance check could go here)
     local canRecover = true
@@ -899,12 +866,11 @@ lib.callback.register('dps-airlines:server:getBlackBoxData', function(source, fl
 end)
 
 lib.callback.register('dps-airlines:server:getCrashHistory', function(source)
-    local Player = GetPlayer(source)
-    if not Player then return {} end
+    local identifier = Bridge.GetIdentifier(source)
+    if not identifier then return {} end
 
     -- Bosses can see all, pilots see their own
-    local citizenid = Player.PlayerData.citizenid
-    local isBoss = Player.PlayerData.job.grade.level >= Config.BossGrade
+    local isBoss = Bridge.GetJobGrade(source) >= Config.BossGrade
 
     local crashes
     if isBoss then
@@ -923,7 +889,7 @@ lib.callback.register('dps-airlines:server:getCrashHistory', function(source)
             WHERE c.pilot_citizenid = ?
             ORDER BY c.crash_time DESC
             LIMIT 10
-        ]], { citizenid })
+        ]], { identifier })
     end
 
     return crashes or {}

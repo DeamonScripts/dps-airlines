@@ -1,5 +1,3 @@
-local QBCore = exports['qb-core']:GetCoreObject()
-
 -- Player State
 PlayerData = {}
 PlayerStats = nil
@@ -24,7 +22,7 @@ local function LoadPlayerData()
 end
 
 CreateThread(function()
-    while not LocalPlayer.state.isLoggedIn do
+    while not Bridge.IsLoggedIn() do
         Wait(100)
     end
     Wait(1000)
@@ -34,7 +32,8 @@ CreateThread(function()
     SetupTargets()
 end)
 
-RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
+-- Bridge handles framework-specific events and fires these
+RegisterNetEvent('dps-airlines:client:playerLoaded', function()
     Wait(2000)
     LoadPlayerData()
     SetupBlips()
@@ -42,7 +41,7 @@ RegisterNetEvent('QBCore:Client:OnPlayerLoaded', function()
     SetupTargets()
 end)
 
-RegisterNetEvent('QBCore:Client:OnPlayerUnload', function()
+RegisterNetEvent('dps-airlines:client:playerUnloaded', function()
     PlayerData = {}
     PlayerStats = nil
     OnDuty = false
@@ -52,9 +51,9 @@ RegisterNetEvent('QBCore:Client:OnPlayerUnload', function()
     CleanupBlips()
 end)
 
-RegisterNetEvent('QBCore:Client:OnJobUpdate', function(job)
+RegisterNetEvent('dps-airlines:client:jobUpdated', function(job)
     PlayerData.job = job
-    OnDuty = job.onduty
+    OnDuty = Bridge.Framework == 'esx' and true or (job.onduty or false)
 end)
 
 -- =====================================
