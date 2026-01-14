@@ -1,360 +1,289 @@
 # DPS Airlines
 
-A comprehensive airlines job system for FiveM servers with realistic pilot career progression.
+**The most immersive pilot career system for FiveM.**
 
-**Version:** 3.0.0
-**Framework:** QB-Core / QBX / ESX (auto-detected)
+Transform your server's aviation into a full roleplay experience. Players don't just fly planes - they build careers as commercial pilots with training, certifications, flight logs, and real consequences.
 
-## Features
+---
 
-### Core Systems
-- **Passenger Flights** - Transport NPC passengers between airports
-- **Cargo Transport** - Haul freight with weight-based payouts
-- **Private Charters** - VIP transport services for players
-- **Ferry Flights** - Aircraft repositioning jobs
+## What Players Experience
 
-### Career Progression
-- **Flight School** - 3-lesson training program for pilot certification
-- **Pilot Logbook NUI** - Visual flight history and statistics
-- **Type Ratings** - Aircraft certifications per model
-- **Reputation System** - Build rep for better planes and assignments
-- **Checkride System** - Recurrent training for inactive pilots
+### Start as a Trainee Pilot
+New pilots begin at **Flight School** where they complete hands-on training:
+- **Takeoff & Landing** - Master the basics at LSIA
+- **Navigation** - Learn to fly waypoint routes between airports
+- **Emergency Procedures** - Handle engine failures and emergency landings
 
-### Operations
-- **Aircraft Maintenance** - Service and repair company aircraft
-- **Boss Menu** - Manage employees, view finances, hire/fire pilots
-- **Dispatch System** - Available jobs board with priority assignments
-- **ATC Clearance** - Realistic flight plan approval system
-- **Weather Delays** - Dynamic weather impacts on flight operations
-- **Emergency Scenarios** - Engine fires, gear failures, bird strikes
+Pass all three lessons and purchase your **Pilot License** ($2,500) to join the airline.
 
-### Technical Features
-- **Black Box Recorder** - Flight telemetry and crash analysis
-- **State Bag Weather Sync** - Server-synced weather via GlobalState
-- **Altitude-Based Throttling** - CPU optimization during cruise
-- **Multi-Framework Bridge** - QB-Core, QBX, and ESX support
+### Build Your Career
+Every flight matters. The system tracks:
+- **Total Flight Hours** - Just like real pilots, hours = experience
+- **PIC Hours** - Pilot in Command time
+- **Night Flying Hours** - Flights after dark
+- **IFR Hours** - Instrument conditions flying
 
-## Requirements
+Your **reputation score** unlocks better aircraft. Start in a small Luxor, work your way up to the executive Miljet.
 
-- [ox_lib](https://github.com/overextended/ox_lib)
-- [ox_target](https://github.com/overextended/ox_target)
-- [oxmysql](https://github.com/overextended/oxmysql)
-- One of: qb-core, qbx_core, or es_extended
+### The Pilot Logbook
+A beautiful in-game logbook (NUI) shows your complete career:
+- Flight history with routes, times, and earnings
+- Type ratings for each aircraft you're certified on
+- Safety record including any incidents
+- Career statistics and achievements
 
-## Installation
+### Real Consequences
+This isn't arcade flying. Pilots face:
+- **Weather Delays** - Thunderstorms ground flights, rain causes delays
+- **Maintenance Requirements** - Aircraft need servicing every 10 flights
+- **Emergency Scenarios** - Random engine fires, gear failures, bird strikes
+- **Crash Records** - Your safety record follows you
 
-1. Download and extract to your resources folder:
-   ```
-   resources/[standalone]/[dps]/dps-airlines/
-   ```
+Handle emergencies well? Gain reputation. Crash? It goes on your permanent record.
 
-2. Run `sql/install.sql` in your database
+---
 
-3. Add the pilot job to your framework:
+## Flight Types
 
-   **QBCore/QBX** (`qb-core/shared/jobs.lua`):
-   ```lua
-   ['pilot'] = {
-       label = 'Los Santos Airlines',
-       type = 'transportation',
-       defaultDuty = false,
-       offDutyPay = false,
-       grades = {
-           ['0'] = { name = 'Trainee', payment = 50 },
-           ['1'] = { name = 'Pilot', payment = 75 },
-           ['2'] = { name = 'Chief Pilot', isboss = true, payment = 150 },
-       },
-   },
-   ```
+### Passenger Flights
+Transport NPC passengers between airports. Watch them board, fly them safely, earn per-passenger bonuses. The Miljet holds 16 passengers for maximum payouts.
 
-   **ESX** (database):
-   ```sql
-   INSERT INTO jobs (name, label) VALUES ('pilot', 'Los Santos Airlines');
-   INSERT INTO job_grades (job_name, grade, name, label, salary) VALUES
-     ('pilot', 0, 'trainee', 'Trainee', 50),
-     ('pilot', 1, 'pilot', 'Pilot', 75),
-     ('pilot', 2, 'chief', 'Chief Pilot', 150);
-   ```
+### Cargo Runs
+Haul freight across San Andreas:
+- **Mail & Packages** - Standard pay
+- **Medical Supplies** - 1.5x pay multiplier
+- **General Freight** - High volume, lower rate
+- **Valuables** - 2.5x pay, high responsibility
 
-4. Add `pilots_license` item to your inventory:
+### Private Charters
+Real players can request charter flights! A customer books a flight, you get dispatched to pick them up and fly them to their destination. True pilot-passenger roleplay.
 
-   **ox_inventory** (`ox_inventory/data/items.lua`):
-   ```lua
-   ['pilots_license'] = {
-       label = 'Pilot License',
-       weight = 10,
-       stack = false,
-       description = 'FAA Commercial Pilot License'
-   },
-   ```
+### Ferry Flights
+Reposition aircraft between airports. Sometimes a plane needs to be somewhere else - you're the one to move it. Simple flights, decent pay.
 
-5. Add to your `server.cfg`:
-   ```cfg
-   ensure dps-airlines
-   ```
+---
+
+## The Dispatch System
+
+No wandering around wondering what to do. The **Dispatch Board** shows available flights:
+- Priority levels (Urgent pays 1.5x)
+- Route and distance
+- Required aircraft type
+- Passenger/cargo counts
+- Expiring assignments
+
+Accept a job, spawn your aircraft, request ATC clearance, and fly.
+
+---
+
+## Air Traffic Control
+
+Before takeoff, pilots must:
+1. Select their runway
+2. Request clearance from ATC
+3. Wait for approval (5-15 seconds, simulating radio comms)
+4. Receive their callsign (e.g., "DPS-742, cleared for takeoff")
+
+It's a small touch that makes every departure feel real.
+
+---
+
+## Weather System
+
+Weather affects operations server-wide (synced via State Bags):
+
+| Condition | Effect |
+|-----------|--------|
+| Clear | Normal operations |
+| Rain | 30% chance of 15-min delay, 1.2x pay bonus |
+| Fog | 20% chance of 10-min delay, 1.1x pay bonus |
+| Snow | 40% chance of 20-min delay, 1.3x pay bonus |
+| Thunder | **All flights grounded** |
+
+Pilots who fly in bad weather earn bonuses for the risk.
+
+---
+
+## Aircraft Fleet
+
+| Aircraft | Size | Passengers | Cargo | Unlock At |
+|----------|------|------------|-------|-----------|
+| **Luxor** | Small | 4 | 500kg | 0 rep |
+| **Shamal** | Medium | 8 | 1,000kg | 30 rep |
+| **Nimbus** | Large | 12 | 2,000kg | 60 rep |
+| **Miljet** | Executive | 16 | 3,000kg | 100 rep |
+
+Each aircraft has different fuel consumption and base pay rates.
+
+---
 
 ## Airports
 
-| Airport | Type | Available Planes |
-|---------|------|------------------|
-| Los Santos International (LSIA) | Hub/International | All |
-| Sandy Shores Airfield | Regional | Luxor, Shamal |
-| Grapeseed Airstrip | Rural | Luxor only |
-| Fort Zancudo | Military (Restricted) | All |
-| Roxwood International | International | All |
-| Paleto Regional | Regional | Luxor, Shamal, Nimbus |
+| Location | Type | Notes |
+|----------|------|-------|
+| **Los Santos International** | Hub | All aircraft, main base |
+| **Sandy Shores Airfield** | Regional | Small/medium planes only |
+| **Grapeseed Airstrip** | Rural | Luxor only (short runway) |
+| **Fort Zancudo** | Military | Restricted access |
+| **Roxwood International** | International | Full service |
+| **Paleto Regional** | Regional | No executive jets |
 
-## Aircraft
+---
 
-| Model | Category | Passengers | Cargo | Reputation Required |
-|-------|----------|------------|-------|---------------------|
-| Luxor | Small | 4 | 500kg | 0 |
-| Shamal | Medium | 8 | 1000kg | 30 |
-| Nimbus | Large | 12 | 2000kg | 60 |
-| Miljet | Executive | 16 | 3000kg | 100 |
+## For Server Owners
+
+### Why Add This?
+
+**Player Retention** - The career progression keeps pilots coming back. They want to hit 100 hours, unlock the Miljet, build their logbook.
+
+**Passive Economy** - Pilots earn money flying, creating economic activity without admin intervention. Society funds integration means the airline pays from its own account.
+
+**Roleplay Depth** - Charter flights create pilot-passenger interactions. Emergency scenarios create dramatic moments. The logbook gives pilots an identity.
+
+**Low Maintenance** - Once configured, it runs itself. Dispatch jobs generate automatically, maintenance happens naturally, weather syncs from your weather script.
+
+### Framework Support
+
+Works with your existing setup - no migrations needed:
+- **QBCore** / **QBX** / **ESX** (auto-detected)
+- **ox_inventory** / **qs-inventory** / **qb-inventory**
+- **qb-management** / **qb-banking** / **esx_addonaccount**
+- **qb-weathersync** / **cd_easytime** / **vSync**
+
+### Performance
+
+Built for busy servers:
+- State Bag weather sync (no client polling)
+- Altitude-based loop throttling (less CPU at cruise)
+- Memory-managed flight recorder
+- Efficient database queries
+
+---
+
+## Quick Start
+
+1. Drop in `resources/[jobs]/dps-airlines`
+2. Run `sql/install.sql`
+3. Add the `pilot` job to your framework
+4. Add `pilots_license` item to your inventory
+5. `ensure dps-airlines`
+
+Full installation details below.
+
+---
+
+## Installation
+
+### Database
+```sql
+-- Run sql/install.sql in your database
+-- Creates 12 tables for flights, stats, logbook, etc.
+```
+
+### Job Setup
+
+**QBCore/QBX** - Add to `qb-core/shared/jobs.lua`:
+```lua
+['pilot'] = {
+    label = 'Los Santos Airlines',
+    type = 'transportation',
+    defaultDuty = false,
+    offDutyPay = false,
+    grades = {
+        ['0'] = { name = 'Trainee', payment = 50 },
+        ['1'] = { name = 'Pilot', payment = 75 },
+        ['2'] = { name = 'Chief Pilot', isboss = true, payment = 150 },
+    },
+},
+```
+
+**ESX** - Run in database:
+```sql
+INSERT INTO jobs (name, label) VALUES ('pilot', 'Los Santos Airlines');
+INSERT INTO job_grades (job_name, grade, name, label, salary) VALUES
+  ('pilot', 0, 'trainee', 'Trainee', 50),
+  ('pilot', 1, 'pilot', 'Pilot', 75),
+  ('pilot', 2, 'chief', 'Chief Pilot', 150);
+```
+
+### License Item
+
+**ox_inventory** - Add to `data/items.lua`:
+```lua
+['pilots_license'] = {
+    label = 'Pilot License',
+    weight = 10,
+    stack = false,
+    description = 'FAA Commercial Pilot License'
+},
+```
+
+---
 
 ## Configuration
 
-### Main Config (`shared/config.lua`)
+All settings in `shared/config.lua`:
 
 ```lua
-Config = {}
-
-Config.Debug = false
-Config.UseTarget = true
-Config.Job = 'pilot'
-Config.BossGrade = 2
-
--- Economy
-Config.PaymentAccount = 'bank'
-Config.UseSocietyFunds = true
-
--- Weather
-Config.Weather = {
-    enabled = true,
-    checkInterval = 60000,
-    groundedWeather = { 'THUNDER' },
-    delays = {
-        ['RAIN'] = { chance = 30, delayMinutes = 15, payBonus = 1.2 },
-        ['THUNDER'] = { chance = 60, delayMinutes = 30, payBonus = 1.5 },
-    }
-}
-
--- Maintenance
-Config.Maintenance = {
-    enabled = true,
-    flightsBeforeService = 10,
-    breakdownChance = 5,
-}
+Config.Job = 'pilot'           -- Job name
+Config.BossGrade = 2           -- Grade needed for boss menu
+Config.PaymentAccount = 'bank' -- Where pilots get paid
+Config.UseSocietyFunds = true  -- Pay from company account
 
 -- Flight School
-Config.FlightSchool = {
-    enabled = true,
-    licenseCost = 2500,
-    requiredLessons = 3,
-}
+Config.FlightSchool.licenseCost = 2500
+Config.FlightSchool.requiredLessons = 3
 
--- Emergency Scenarios
-Config.Emergencies = {
-    enabled = true,
-    multiplier = 1.0,
-    minAltitude = 100,
-}
+-- Maintenance
+Config.Maintenance.flightsBeforeService = 10
+Config.Maintenance.breakdownChance = 5  -- % per flight when overdue
+
+-- Emergencies
+Config.Emergencies.enabled = true
+Config.Emergencies.multiplier = 1.0  -- Adjust frequency
 ```
 
-### Locations (`shared/locations.lua`)
+Airport locations configured in `shared/locations.lua`.
 
-Configure airport coordinates, spawn points, runways, gates, and NPC positions.
-
-## Database Tables
-
-The SQL script creates these tables:
-- `airline_flights` - Flight records
-- `airline_pilot_stats` - Pilot statistics and hours
-- `airline_pilot_logbook` - Detailed flight log
-- `airline_ferry_jobs` - Aircraft repositioning jobs
-- `airline_charter_requests` - Player charter requests
-- `airline_maintenance` - Aircraft service records
-- `airline_charters` - Active charter bookings
-- `airline_dispatch` - Available flight jobs
-- `airline_blackbox` - Flight recorder data
-- `airline_crashes` - Crash records
-- `airline_checkrides` - Training records
-- `airline_incidents` - Emergency events
+---
 
 ## Admin Commands
 
-| Command | Permission | Description |
-|---------|------------|-------------|
-| `/setpilotgrade [id] [grade]` | admin | Set pilot job grade |
-| `/resetpilotstats [id]` | admin | Reset pilot statistics |
+| Command | Description |
+|---------|-------------|
+| `/setpilotgrade [id] [0-2]` | Set player's pilot rank |
+| `/resetpilotstats [id]` | Wipe player's flight history |
 
-## Exports
+---
 
-### Server Exports
+## Dependencies
 
-```lua
--- Get weather state
-local weather = exports['dps-airlines']:GetWeatherState()
--- Returns: { weather, canFly, delayMinutes, payBonus, lastUpdate }
+**Required:**
+- [ox_lib](https://github.com/overextended/ox_lib)
+- [ox_target](https://github.com/overextended/ox_target)
+- [oxmysql](https://github.com/overextended/oxmysql)
 
--- Create logbook entry (internal use)
-exports['dps-airlines']:CreateLogbookEntry(identifier, logbookData)
-```
+**Framework (one of):**
+- qb-core / qbx_core / es_extended
 
-### Client Exports
+---
 
-```lua
--- Check duty status
-local onDuty = exports['dps-airlines']:IsOnDuty()
+## Version History
 
--- Get current flight
-local flight = exports['dps-airlines']:GetCurrentFlight()
+**v3.0.0** - Multi-framework support (QB/QBX/ESX), bridge architecture
+**v2.2.0** - Pilot Logbook NUI, emergency scenarios, black box recorder
+**v2.1.0** - Ferry flights, charter system, realistic pilot stats
+**v2.0.0** - Performance optimizations, advanced features
+**v1.0.0** - Initial release
 
--- Get current plane entity
-local plane = exports['dps-airlines']:GetCurrentPlane()
-
--- ATC Functions
-exports['dps-airlines']:RequestClearance(runway)
-exports['dps-airlines']:LandingClearance(airport)
-exports['dps-airlines']:ResetClearance()
-
--- Weather
-local conditions = exports['dps-airlines']:CheckWeatherConditions()
-local canFly, bonus = exports['dps-airlines']:ApplyWeatherDelay()
-local weather = exports['dps-airlines']:GetCachedWeather()
-
--- Flight Phase
-local phase = exports['dps-airlines']:GetFlightPhase()
-local hasClearance = exports['dps-airlines']:HasClearance()
-local callsign = exports['dps-airlines']:GetCallsign()
-
--- Black Box
-exports['dps-airlines']:StartBlackBox(flightNumber)
-exports['dps-airlines']:StopBlackBox(reason)
-exports['dps-airlines']:RecordBlackBoxEvent(eventType, data)
-exports['dps-airlines']:RecordEmergency(emergencyType, details)
-exports['dps-airlines']:IsRecording()
-```
-
-## Framework Support
-
-### Automatic Detection
-The bridge automatically detects your framework:
-- QBX (`qbx_core`)
-- QBCore (`qb-core`)
-- ESX (`es_extended`)
-
-### Inventory Support
-Automatic detection for:
-- ox_inventory
-- qs-inventory
-- qb-inventory (native)
-- ESX inventory
-
-### Society Funds
-Automatic detection for:
-- qb-management
-- qb-banking
-- esx_addonaccount
-
-### Weather Sync
-Automatic detection for:
-- qb-weathersync
-- cd_easytime
-- vSync GlobalState
-
-## Flight School System
-
-1. Players interact with Flight Instructor NPC
-2. Complete 3 training lessons:
-   - Takeoff & Landing
-   - Navigation
-   - Emergency Procedures
-3. Purchase pilot license ($2,500)
-4. License item added to inventory
-
-## Emergency Scenarios
-
-Random in-flight emergencies with reputation consequences:
-- Engine Fire (+10/-25 rep)
-- Gear Failure (+8/-15 rep)
-- Fuel Leak (+8/-20 rep)
-- Electrical Failure (+5/-10 rep)
-- Hydraulic Failure (+7/-15 rep)
-- Bird Strike (+3/-5 rep)
-
-## Pilot Logbook NUI
-
-Interactive web-based logbook with:
-- Overview tab: Hours, landings, license, earnings
-- Flight Log tab: Filterable flight history
-- Type Ratings tab: Aircraft certifications
-- Incidents tab: Safety record
-
-Access via `/logbook` or configured keybind.
-
-## Performance
-
-- State bag weather sync (no client polling)
-- Altitude-based loop throttling
-- Batched database operations
-- Configurable spawn delays
-- Memory cleanup for blackbox records
-
-## Troubleshooting
-
-**Players can't clock in?**
-- Verify job is configured in framework
-- Check `Config.Job` matches job name
-
-**License not given?**
-- Check inventory resource is running
-- Verify `pilots_license` item exists
-
-**Weather not syncing?**
-- Check weather resource is running
-- Enable `Config.Debug` for state bag logs
-
-**Planes not spawning?**
-- Check spawn points in `locations.lua`
-- Verify ox_target is working
-
-## Changelog
-
-### v3.0.0
-- Multi-framework support (QB/QBX/ESX)
-- Bridge architecture for abstraction
-- Removed qb-core hard dependency
-- Inventory abstraction (ox/qs/qb/esx)
-- Society funds abstraction
-- Weather system abstraction
-- Improved State Bag usage
-
-### v2.2.0
-- Pilot Logbook NUI
-- Emergency Scenarios
-- Black Box recorder
-
-### v2.1.0
-- Ferry flights
-- Charter system
-- Realistic pilot stats
-
-### v2.0.0
-- Performance optimizations
-- Advanced features
-
-### v1.0.0
-- Initial release
-
-## License
-
-This resource is provided for use on DPSRP servers. Free to modify for your own use.
+---
 
 ## Credits
 
-- DaemonAlex
-- DPSRP Development Team
+- **DaemonAlex** - Original concept and development
+- **DPSRP Development Team**
 - Overextended (ox_lib, ox_target, oxmysql)
-- QBCore/ESX Framework Teams
+
+---
+
+*DPS Airlines - Where every flight tells a story.*
